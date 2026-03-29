@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# Local dataset (add melb_data.csv yourself)
+data/
+
+# Generated artifacts (run `python -m src.train` after clone)
+models/*.joblib
+models/training_metrics.json
