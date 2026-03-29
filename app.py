@@ -395,6 +395,25 @@ def _buyer_guide_map_point(ref: dict, suburb: str, med: pd.Series) -> tuple[floa
     )
 
 
+def _dollar_range_from_uncertainty(bundle: dict, pred_log: float) -> tuple[float, float] | None:
+    """Approximate dollar range using holdout log-residual percentiles, else ±RMSE fallback."""
+    unc = bundle.get("uncertainty") or {}
+    p5 = unc.get("log_residual_p05")
+    p95 = unc.get("log_residual_p95")
+    if p5 is not None and p95 is not None:
+        lo = float(np.expm1(pred_log + float(p5)))
+        hi = float(np.expm1(pred_log + float(p95)))
+        return max(0.0, lo), hi
+    metrics = bundle.get("metrics") or {}
+    name = bundle.get("model_name") or "hist_gradient_boosting"
+    row = metrics.get(name) or (next(iter(metrics.values())) if metrics else None)
+    if row and row.get("rmse_dollars") is not None:
+        rmse = float(row["rmse_dollars"])
+        mid = float(np.expm1(pred_log))
+        return max(0.0, mid - rmse), mid + rmse
+    return None
+
+
 def top_feature_importances_from_pipeline(pipeline, n: int = 10) -> list[dict]:
     """Match training script: importances on preprocessed feature names."""
     model = pipeline.named_steps["model"]
@@ -405,6 +424,22 @@ def top_feature_importances_from_pipeline(pipeline, n: int = 10) -> list[dict]:
     scores = model.feature_importances_
     order = np.argsort(scores)[::-1][:n]
     return [{"feature": str(names[i]), "importance": float(scores[i])} for i in order]
+
+
+@st.cache_data
+def _latest_sales_in_suburb(suburb: str, n: int = 3) -> pd.DataFrame:
+    """Most recent dated sales rows for a suburb in the training CSV (day/month/year dates)."""
+    df = pd.read_csv(
+        DATA_PATH,
+        usecols=["Suburb", "Address", "Date", "Price", "Type", "Rooms"],
+    )
+    df = df[df["Suburb"] == suburb].copy()
+    if df.empty:
+        return df
+    df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
+    df = df.dropna(subset=["Date", "Price"])
+    df = df.sort_values("Date", ascending=False).head(n)
+    return df
 
 
 def main():
@@ -456,7 +491,7 @@ def main():
             "↺ Reset to defaults",
             on_click=_apply_defaults,
             args=(defaults,),
-            use_container_width=True,
+            width="stretch",
             help="Restore all fields to defaults: first-listed suburb and property type. "
             "Rooms, bedrooms, bathrooms, car spaces, land size, building area, and year built "
             "use training medians for that suburb × type (with type / suburb / global fallbacks). "
@@ -489,6 +524,9 @@ def main():
             ref["types"],
             key=SS_TYPE,
             format_func=_format_property_type,
+            help="**House (h)**, **townhouse (t)**, or **unit / apartment (u)**. When you change this, "
+            "**rooms through year built** reset to training **medians for this suburb × type** "
+            "(then type-only → suburb-only → global median if a cell is missing).",
         )
         if st.session_state.get("_ptype_prev") != property_type:
             for k, v in _dwelling_values_from_profile(
@@ -499,13 +537,6 @@ def main():
 
         st.divider()
         st.markdown("**Dwelling**")
-        st.caption(
-            "These **seven** fields use training **medians for suburb × property type** when you "
-            "change **Suburb** or **Property type**: "
-            "**rooms**, **bedrooms**, **bathrooms**, **car spaces**, **land size**, "
-            "**building area**, **year built** "
-            "(fallback: type-only → suburb-only → global median if needed)."
-        )
         rooms = st.slider(
             "Rooms",
             1,
@@ -647,16 +678,61 @@ def main():
     X = prop.to_feature_frame()
     pred_log = pipeline.predict(X)[0]
     price = float(np.expm1(pred_log))
+    unc_range = _dollar_range_from_uncertainty(bundle, pred_log)
 
     left, right = st.columns([1, 1.15], gap="large")
     with left:
         with st.container(border=True):
             st.markdown("**Model estimate (sale price)**")
-            st.markdown(f"# ${price:,.0f}")
+            # Escape $ as \$ — bare $ starts LaTeX/math mode in Streamlit markdown (monospace font).
+            st.markdown(f"# \\${price:,.0f}")
+            if unc_range is not None:
+                lo_u, hi_u = unc_range
+                st.markdown(
+                    f"**Approx. range (uncertainty):** \\${lo_u:,.0f} – \\${hi_u:,.0f} AUD"
+                )
+            uinf = bundle.get("uncertainty") or {}
+            if unc_range is not None and uinf.get("log_residual_p05") is not None:
+                st.caption(
+                    "AUD · Range uses **5th–95th percentile** of holdout **log-price** errors "
+                    "(same split as training metrics). Heuristic band, not a formal prediction "
+                    "interval — illustrative only, not a valuation."
+                )
+            elif unc_range is not None:
+                st.caption(
+                    "AUD · Range uses **± holdout RMSE** (older bundle). Illustrative only, "
+                    "not a valuation."
+                )
+            else:
+                st.caption(
+                    "AUD · Re-train with `python -m src.train` to bundle uncertainty for a range. "
+                    "Illustrative only, not a valuation."
+                )
+
+        recent = _latest_sales_in_suburb(suburb, 3)
+        if len(recent) > 0:
+            st.markdown("**Latest sales in this suburb**")
             st.caption(
-                "AUD · from the trained model above; illustrative only, not a valuation. "
-                "Wide error bands in real markets."
+                "Three most recent **dated** rows for **"
+                + suburb
+                + "** in the training file — historical sample only, not live or complete."
             )
+            disp = recent.assign(
+                When=recent["Date"].dt.strftime("%d %b %Y"),
+                Price_aud=recent["Price"].apply(lambda x: f"${float(x):,.0f}"),
+                Dwelling=recent["Type"].map(lambda c: PROPERTY_TYPE_LABELS.get(str(c), str(c))),
+            )[["When", "Address", "Price_aud", "Dwelling", "Rooms"]]
+            disp = disp.rename(
+                columns={
+                    "When": "Sale date",
+                    "Price_aud": "Price",
+                    "Dwelling": "Type",
+                }
+            )
+            st.dataframe(disp, width="stretch", hide_index=True)
+        else:
+            st.caption("No dated sales rows for this suburb in the training file.")
+
     with right:
         st.markdown("**What drives the model estimate**")
         imp = bundle.get("feature_importances") or []
@@ -682,12 +758,12 @@ def main():
     st.markdown(f"### Suburb snapshot · **{suburb}**")
     st.caption(
         "Quick orientation from the historical sales file — **not** used to compute the estimate "
-        "above. Not schools, transport, or planning; use official sources for those."
+        "above."
     )
     g_lat, g_lon = _buyer_guide_map_point(ref, suburb, med)
     snap_left, snap_right = st.columns([1.1, 1], gap="large")
     with snap_left:
-        st.map(pd.DataFrame({"lat": [g_lat], "lon": [g_lon]}), use_container_width=True)
+        st.map(pd.DataFrame({"lat": [g_lat], "lon": [g_lon]}), width="stretch")
         st.caption(
             "Pin: **median lat/lon** of listings in this suburb in the training sample "
             "(not a suburb boundary; ignores Advanced location sliders)."
@@ -713,6 +789,9 @@ def main():
     with st.expander("Model details (holdout metrics)"):
         metrics = bundle.get("metrics", {})
         st.json(metrics)
+        if bundle.get("uncertainty"):
+            st.caption("Used for the **approx. dollar range** (log-residual percentiles on holdout).")
+            st.json(bundle["uncertainty"])
         if METRICS_PATH.is_file():
             st.caption(f"Mirrored in `{METRICS_PATH.name}` for reference.")
             st.code(json.dumps(json.loads(METRICS_PATH.read_text(encoding="utf-8")), indent=2))

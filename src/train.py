@@ -109,6 +109,22 @@ def top_feature_importances(
     return [{"feature": str(names[i]), "importance": float(scores[i])} for i in order]
 
 
+def holdout_uncertainty(
+    pipeline: Pipeline, X_test: pd.DataFrame, y_test_log: np.ndarray
+) -> dict[str, float]:
+    """Percentiles of test-set log residuals for approximate prediction intervals."""
+    y_test_log = np.asarray(y_test_log).ravel()
+    y_pred_log = pipeline.predict(X_test)
+    r = y_test_log - y_pred_log
+    p5, p50, p95 = np.percentile(r, [5, 50, 95])
+    return {
+        "log_residual_p05": float(p5),
+        "log_residual_p50": float(p50),
+        "log_residual_p95": float(p95),
+        "rmse_log_holdout": float(np.sqrt(np.mean(r**2))),
+    }
+
+
 def permutation_top_importances(
     pipeline: Pipeline,
     X_test: pd.DataFrame,
@@ -173,12 +189,15 @@ def main():
     if not importances:
         importances = permutation_top_importances(best_pipe, X_test, y_test, n=10)
 
+    uncertainty = holdout_uncertainty(best_pipe, X_test, y_test.values)
+
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     bundle = {
         "pipeline": best_pipe,
         "model_name": best_name,
         "metrics": {m["model"]: m for m in results},
         "feature_importances": importances,
+        "uncertainty": uncertainty,
     }
     joblib.dump(bundle, MODEL_PATH, compress=("zlib", 9))
 
