@@ -6,7 +6,7 @@
   },
   "random_forest": {
     "model": "random_forest",
-    "rmse_dollars": 269133.6856383947,
-    "r2_log": 0.8663269978176713
+    "rmse_dollars": 268082.88335663575,
+    "r2_log": 0.8678794493016855
   }
 }

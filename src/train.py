@@ -29,6 +29,16 @@ MODEL_DIR = ROOT / "models"
 MODEL_PATH = MODEL_DIR / "price_model.joblib"
 METRICS_PATH = MODEL_DIR / "training_metrics.json"
 
+# Keep the saved artifact small enough for GitHub (~25–50MB typical cap for comfortable pushes).
+# Tuning trees matters more than n_estimators for disk size once depth is capped.
+_RF_KWARGS = dict(
+    n_estimators=80,
+    max_depth=24,
+    min_samples_leaf=2,
+    random_state=42,
+    n_jobs=-1,
+)
+
 
 def rmse_dollars(y_true_log: np.ndarray, y_pred_log: np.ndarray) -> float:
     return float(np.sqrt(mean_squared_error(np.expm1(y_true_log), np.expm1(y_pred_log))))
@@ -108,12 +118,7 @@ def main():
 
     candidates = {
         "linear_regression": LinearRegression(),
-        "random_forest": RandomForestRegressor(
-            n_estimators=200,
-            random_state=42,
-            n_jobs=-1,
-            max_depth=None,
-        ),
+        "random_forest": RandomForestRegressor(**_RF_KWARGS),
     }
 
     results = []
@@ -137,7 +142,7 @@ def main():
         "metrics": {m["model"]: m for m in results},
         "feature_importances": importances,
     }
-    joblib.dump(bundle, MODEL_PATH)
+    joblib.dump(bundle, MODEL_PATH, compress=("zlib", 3))
 
     METRICS_PATH.write_text(json.dumps(bundle["metrics"], indent=2), encoding="utf-8")
 

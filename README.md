@@ -23,7 +23,7 @@ From the repository root:
 python -m src.train
 ```
 
-This fits a **LinearRegression** baseline and a **RandomForestRegressor**, compares RMSE (AUD) on a holdout set, and saves the better model to `models/price_model.joblib` plus `models/training_metrics.json`.
+This fits a **LinearRegression** baseline and a **RandomForestRegressor** (moderate size: `n_estimators=80`, `max_depth=24` so the `joblib` stays GitHub-friendly), compares RMSE (AUD) on a holdout set, and saves the better model with zlib compression to `models/price_model.joblib` plus `models/training_metrics.json`.
 
 ## Run the app
 
@@ -42,7 +42,7 @@ The hosted app **does not run training**; it expects these files **in the GitHub
 
 Then on [share.streamlit.io](https://share.streamlit.io): deploy from your repo, main file `app.py`, branch `main` (or your default). Redeploy after each push.
 
-If `git push` rejects a large `price_model.joblib`, use [Git LFS](https://git-lfs.com) for that file or trim the model in `src/train.py` (fewer trees).
+The saved forest is typically **~10–20MB** on disk. If you ever need a smaller artifact, lower `n_estimators` / `max_depth` in `src/train.py` (`_RF_KWARGS`). If a file is still over GitHub’s limit, use [Git LFS](https://git-lfs.com) for `*.joblib`.
 
 ## Project layout
 
