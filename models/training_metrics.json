@@ -1,0 +1,12 @@
+{
+  "linear_regression": {
+    "model": "linear_regression",
+    "rmse_dollars": 3713122.139523892,
+    "r2_log": 0.7457581923841514
+  },
+  "random_forest": {
+    "model": "random_forest",
+    "rmse_dollars": 269133.6856383947,
+    "r2_log": 0.8663269978176713
+  }
+}

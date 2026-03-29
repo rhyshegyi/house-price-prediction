@@ -35,9 +35,14 @@ Open the local URL shown in the terminal. Use the sidebar to set property featur
 
 ## Deploy (Streamlit Community Cloud)
 
-1. Push this repo (include `models/price_model.joblib` if you want the app to run without a training step on the server, or run training in a build step).
-2. Set the main file to `app.py` and Python version to match your environment.
-3. Add the live URL to your resume or project page when ready.
+The hosted app **does not run training**; it expects these files **in the GitHub repo**:
+
+1. `models/price_model.joblib` and `models/training_metrics.json` — run `python -m src.train` locally, then commit and push them.
+2. `data/melb_data.csv` — required for suburb/type/region dropdowns and default medians (same file as local training).
+
+Then on [share.streamlit.io](https://share.streamlit.io): deploy from your repo, main file `app.py`, branch `main` (or your default). Redeploy after each push.
+
+If `git push` rejects a large `price_model.joblib`, use [Git LFS](https://git-lfs.com) for that file or trim the model in `src/train.py` (fewer trees).
 
 ## Project layout
 

@@ -6,9 +6,10 @@ env/
 .pytest_cache/
 .mypy_cache/
 
-# Local dataset (add melb_data.csv yourself)
-data/
+# Dataset: ignore everything in data/ except the CSV used by the app (needed for Streamlit Cloud).
+data/*
+!data/melb_data.csv
 
-# Generated artifacts (run `python -m src.train` after clone)
-models/*.joblib
-models/training_metrics.json
+# Trained artifacts: commit `price_model.joblib` + metrics for deployment (Streamlit has no training step).
+# Ignore other experimental dumps if you add them later.
+models/experimental_*.joblib
