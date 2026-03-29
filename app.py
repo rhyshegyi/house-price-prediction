@@ -45,11 +45,23 @@ def reference_data():
     }
 
 
+def top_feature_importances_from_pipeline(pipeline, n: int = 10) -> list[dict]:
+    """Match training script: importances on preprocessed feature names."""
+    model = pipeline.named_steps["model"]
+    prep = pipeline.named_steps["prep"]
+    if not hasattr(model, "feature_importances_"):
+        return []
+    names = prep.get_feature_names_out()
+    scores = model.feature_importances_
+    order = np.argsort(scores)[::-1][:n]
+    return [{"feature": str(names[i]), "importance": float(scores[i])} for i in order]
+
+
 def main():
     st.set_page_config(page_title="Melbourne House Price Predictor", layout="wide")
     st.title("Melbourne house price predictor")
     st.caption(
-        "Regression model trained on the Melbourne Housing dataset (RandomForest + preprocessing pipeline)."
+        "Regression model trained on the Melbourne Housing dataset (HistGradientBoosting + preprocessing pipeline)."
     )
 
     bundle = load_bundle()
@@ -154,11 +166,15 @@ def main():
 
     st.subheader("Top feature importances")
     imp = bundle.get("feature_importances") or []
+    if not imp:
+        imp = top_feature_importances_from_pipeline(pipeline)
     if imp:
         chart_data = pd.DataFrame(imp).set_index("feature")["importance"].sort_values()
         st.bar_chart(chart_data)
     else:
-        st.info("Feature importances are only available for tree-based models.")
+        st.info(
+            "Feature importances are not exposed for the fitted estimator (e.g. linear regression)."
+        )
 
     with st.expander("Model metrics (holdout test set)"):
         metrics = bundle.get("metrics", {})
