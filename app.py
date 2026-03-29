@@ -169,11 +169,15 @@ def main():
     if not imp:
         imp = top_feature_importances_from_pipeline(pipeline)
     if imp:
+        st.caption(
+            "Higher = larger drop in score when the feature is shuffled (permutation importance on raw columns)."
+        )
         chart_data = pd.DataFrame(imp).set_index("feature")["importance"].sort_values()
         st.bar_chart(chart_data)
     else:
         st.info(
-            "Feature importances are not exposed for the fitted estimator (e.g. linear regression)."
+            "No importance data in the saved model bundle. Re-run `python -m src.train` "
+            "and redeploy with the new `models/price_model.joblib`."
         )
 
     with st.expander("Model metrics (holdout test set)"):

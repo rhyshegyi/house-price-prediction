@@ -17,6 +17,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LinearRegression
+from sklearn.inspection import permutation_importance
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
@@ -97,7 +98,7 @@ def evaluate(
 def top_feature_importances(
     pipeline: Pipeline, n: int = 10
 ) -> list[dict[str, float]]:
-    """Tree model feature importances on transformed feature names."""
+    """Impurity importances when the final estimator exposes `feature_importances_`."""
     model = pipeline.named_steps["model"]
     prep = pipeline.named_steps["prep"]
     if not hasattr(model, "feature_importances_"):
@@ -105,6 +106,39 @@ def top_feature_importances(
     names = prep.get_feature_names_out()
     scores = model.feature_importances_
     order = np.argsort(scores)[::-1][:n]
+    return [{"feature": str(names[i]), "importance": float(scores[i])} for i in order]
+
+
+def permutation_top_importances(
+    pipeline: Pipeline,
+    X_test: pd.DataFrame,
+    y_test: pd.Series | np.ndarray,
+    n: int = 10,
+    n_repeats: int = 8,
+) -> list[dict[str, float]]:
+    """Raw-column importances; required for HistGradientBoosting (no `feature_importances_`)."""
+    y_arr = np.asarray(y_test).ravel()
+    max_rows = 2500
+    if len(X_test) > max_rows:
+        rng = np.random.RandomState(42)
+        idx = rng.choice(len(X_test), size=max_rows, replace=False)
+        X_eval = X_test.iloc[idx]
+        y_eval = y_arr[idx]
+    else:
+        X_eval = X_test
+        y_eval = y_arr
+
+    r = permutation_importance(
+        pipeline,
+        X_eval,
+        y_eval,
+        n_repeats=n_repeats,
+        random_state=42,
+        n_jobs=-1,
+    )
+    names = list(X_test.columns)
+    scores = r.importances_mean
+    order = np.argsort(np.abs(scores))[::-1][:n]
     return [{"feature": str(names[i]), "importance": float(scores[i])} for i in order]
 
 
@@ -136,6 +170,8 @@ def main():
     best_pipe = fitted[best_name]
 
     importances = top_feature_importances(best_pipe, n=10)
+    if not importances:
+        importances = permutation_top_importances(best_pipe, X_test, y_test, n=10)
 
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     bundle = {
