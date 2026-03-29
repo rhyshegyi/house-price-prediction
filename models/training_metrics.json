@@ -4,9 +4,9 @@
     "rmse_dollars": 3713122.139523892,
     "r2_log": 0.7457581923841514
   },
-  "random_forest": {
-    "model": "random_forest",
-    "rmse_dollars": 268082.88335663575,
-    "r2_log": 0.8678794493016855
+  "hist_gradient_boosting": {
+    "model": "hist_gradient_boosting",
+    "rmse_dollars": 250970.95221828882,
+    "r2_log": 0.8777092641744987
   }
 }

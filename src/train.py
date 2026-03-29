@@ -14,7 +14,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
@@ -29,14 +29,16 @@ MODEL_DIR = ROOT / "models"
 MODEL_PATH = MODEL_DIR / "price_model.joblib"
 METRICS_PATH = MODEL_DIR / "training_metrics.json"
 
-# Keep the saved artifact small enough for GitHub (~25–50MB typical cap for comfortable pushes).
-# Tuning trees matters more than n_estimators for disk size once depth is capped.
-_RF_KWARGS = dict(
-    n_estimators=80,
-    max_depth=24,
-    min_samples_leaf=2,
+# HistGradientBoosting fits in ~1MB on disk (vs tens of MB for RandomForest on this OHE data).
+# Uncompressed joblib of a forest can look ~30MB+; the IDE "line count" on .joblib is not file size.
+_HGB_KWARGS = dict(
+    max_iter=200,
+    max_depth=10,
+    learning_rate=0.08,
     random_state=42,
-    n_jobs=-1,
+    early_stopping=True,
+    validation_fraction=0.1,
+    n_iter_no_change=15,
 )
 
 
@@ -95,7 +97,7 @@ def evaluate(
 def top_feature_importances(
     pipeline: Pipeline, n: int = 10
 ) -> list[dict[str, float]]:
-    """RandomForest feature importances on transformed feature names."""
+    """Tree model feature importances on transformed feature names."""
     model = pipeline.named_steps["model"]
     prep = pipeline.named_steps["prep"]
     if not hasattr(model, "feature_importances_"):
@@ -118,7 +120,7 @@ def main():
 
     candidates = {
         "linear_regression": LinearRegression(),
-        "random_forest": RandomForestRegressor(**_RF_KWARGS),
+        "hist_gradient_boosting": HistGradientBoostingRegressor(**_HGB_KWARGS),
     }
 
     results = []
@@ -142,11 +144,12 @@ def main():
         "metrics": {m["model"]: m for m in results},
         "feature_importances": importances,
     }
-    joblib.dump(bundle, MODEL_PATH, compress=("zlib", 3))
+    joblib.dump(bundle, MODEL_PATH, compress=("zlib", 9))
 
     METRICS_PATH.write_text(json.dumps(bundle["metrics"], indent=2), encoding="utf-8")
 
-    print(f"Saved best model ({best_name}) to {MODEL_PATH}")
+    size_mb = MODEL_PATH.stat().st_size / (1024**2)
+    print(f"Saved best model ({best_name}) to {MODEL_PATH} ({size_mb:.2f} MB on disk)")
     for m in results:
         print(m)
 

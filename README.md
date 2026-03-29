@@ -1,6 +1,6 @@
 # House price prediction (Melbourne)
 
-Predicts residential sale prices from listing features using a **scikit-learn** pipeline (rare-suburb grouping, median / mode imputation, one-hot encoding, **RandomForestRegressor**). The target is `log1p(Price)`; predictions are returned on the dollar scale with `expm1`. A **Streamlit** app loads the trained artifact and validates inputs with **Pydantic**.
+Predicts residential sale prices from listing features using a **scikit-learn** pipeline (rare-suburb grouping, median / mode imputation, one-hot encoding, **HistGradientBoostingRegressor**). The target is `log1p(Price)`; predictions are returned on the dollar scale with `expm1`. A **Streamlit** app loads the trained artifact and validates inputs with **Pydantic**.
 
 ## Setup
 
@@ -23,7 +23,7 @@ From the repository root:
 python -m src.train
 ```
 
-This fits a **LinearRegression** baseline and a **RandomForestRegressor** (moderate size: `n_estimators=80`, `max_depth=24` so the `joblib` stays GitHub-friendly), compares RMSE (AUD) on a holdout set, and saves the better model with zlib compression to `models/price_model.joblib` plus `models/training_metrics.json`.
+This fits a **LinearRegression** baseline and a **HistGradientBoostingRegressor** (small on disk versus a random forest on one-hot features), compares RMSE (AUD) on a holdout set, and saves the better model with zlib compression to `models/price_model.joblib` plus `models/training_metrics.json`. Training prints the artifact size in MB.
 
 ## Run the app
 
@@ -42,7 +42,7 @@ The hosted app **does not run training**; it expects these files **in the GitHub
 
 Then on [share.streamlit.io](https://share.streamlit.io): deploy from your repo, main file `app.py`, branch `main` (or your default). Redeploy after each push.
 
-The saved forest is typically **~10–20MB** on disk. If you ever need a smaller artifact, lower `n_estimators` / `max_depth` in `src/train.py` (`_RF_KWARGS`). If a file is still over GitHub’s limit, use [Git LFS](https://git-lfs.com) for `*.joblib`.
+The saved booster is typically **under ~1MB** on disk (random forests on this pipeline were **~10MB compressed / ~30MB raw**—your IDE “line count” on `.joblib` is not megabytes). Tweak `_HGB_KWARGS` in `src/train.py` if needed. If a file is still over GitHub’s limit, use [Git LFS](https://git-lfs.com) for `*.joblib`.
 
 ## Project layout
 
