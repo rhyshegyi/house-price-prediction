@@ -1,4 +1,12 @@
-"""Train baseline and tree models; save the best full sklearn Pipeline."""
+"""Train baseline and tree models; save the best full sklearn Pipeline.
+
+Key ideas:
+- Train on `log1p(Price)` so the target is closer to "normal" and predictions are stable.
+- Bundle the full sklearn `Pipeline` (preprocessing + model) so the app can predict
+  with a single `pipeline.predict(...)` call.
+- Store holdout residual uncertainty percentiles for a lightweight "approx range"
+  in the UI.
+"""
 
 from __future__ import annotations
 
@@ -44,10 +52,13 @@ _HGB_KWARGS = dict(
 
 
 def rmse_dollars(y_true_log: np.ndarray, y_pred_log: np.ndarray) -> float:
+    # Convert log predictions back to dollars before computing RMSE in $ space.
     return float(np.sqrt(mean_squared_error(np.expm1(y_true_log), np.expm1(y_pred_log))))
 
 
 def build_preprocessor() -> ColumnTransformer:
+    # Numeric: median imputation (simple, robust for tabular housing data).
+    # Categorical: most-frequent imputation + one-hot encoding.
     numeric_transformer = Pipeline(
         [
             ("imputer", SimpleImputer(strategy="median")),
@@ -72,6 +83,8 @@ def build_preprocessor() -> ColumnTransformer:
 
 
 def build_full_pipeline(estimator) -> Pipeline:
+    # Rare suburbs are mapped to a single `"Other"` bucket to reduce one-hot
+    # sparsity and keep preprocessing consistent between train and app usage.
     return Pipeline(
         [
             ("suburb", SuburbGrouper(column="Suburb", min_count=20, other_label="Other")),
@@ -87,6 +100,8 @@ def evaluate(
     X_test: pd.DataFrame,
     y_test_log: np.ndarray,
 ) -> dict:
+    # Evaluate using RMSE in dollar-space and R^2 in log-space.
+    # (The UI reports dollar estimates, but training uses log targets.)
     y_pred_log = pipeline.predict(X_test)
     return {
         "model": name,
@@ -99,6 +114,8 @@ def top_feature_importances(
     pipeline: Pipeline, n: int = 10
 ) -> list[dict[str, float]]:
     """Impurity importances when the final estimator exposes `feature_importances_`."""
+    # Note: for models that don't provide impurity importances, callers fall back
+    # to permutation importance (see `permutation_top_importances`).
     model = pipeline.named_steps["model"]
     prep = pipeline.named_steps["prep"]
     if not hasattr(model, "feature_importances_"):
@@ -113,6 +130,9 @@ def holdout_uncertainty(
     pipeline: Pipeline, X_test: pd.DataFrame, y_test_log: np.ndarray
 ) -> dict[str, float]:
     """Percentiles of test-set log residuals for approximate prediction intervals."""
+    # Residuals are computed in log space:
+    # r = (true_log - pred_log)
+    # then we store percentiles (p05/p50/p95) so the app can build a rough dollar band.
     y_test_log = np.asarray(y_test_log).ravel()
     y_pred_log = pipeline.predict(X_test)
     r = y_test_log - y_pred_log
@@ -133,6 +153,9 @@ def permutation_top_importances(
     n_repeats: int = 8,
 ) -> list[dict[str, float]]:
     """Raw-column importances; required for HistGradientBoosting (no `feature_importances_`)."""
+    # For speed, we optionally subsample X_test for the permutation step.
+    # We still compute importances on the *original raw columns* (pre-OHE),
+    # which matches how the app labels "raw inputs".
     y_arr = np.asarray(y_test).ravel()
     max_rows = 2500
     if len(X_test) > max_rows:
@@ -159,8 +182,11 @@ def permutation_top_importances(
 
 
 def main():
+    # Train/test split is done once, then we fit/evaluate both candidate models
+    # on the same holdout set for fair comparison.
     df = pd.read_csv(DATA_PATH)
     df = df.dropna(subset=["Price"])
+    # Target transform used consistently across evaluation + uncertainty.
     y_log = np.log1p(df["Price"].astype(float))
     X = select_features(df)
 

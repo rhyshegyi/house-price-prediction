@@ -44,6 +44,8 @@ PROPERTY_TYPE_LABELS = {
     "u": "Unit / apartment",
 }
 
+# Dataset uses short codes for property type (h/t/u). We map them to readable UI labels.
+
 
 def _format_property_type(code: str) -> str:
     label = PROPERTY_TYPE_LABELS.get(code, code)
@@ -121,7 +123,11 @@ def _int_median_suburb_type(
     lo: int,
     hi: int,
 ) -> int:
-    """Median for (suburb, type), else type-only, else suburb-only, else global."""
+    """Median for (suburb,type), else type-only, else suburb-only, else global.
+
+    Values are clipped to [lo, hi] to keep sliders/inputs in a sensible range even
+    when some medians are missing (NaN) for a suburb.
+    """
     k = (suburb, ptype)
     v = ref[st_key].get(k)
     if v is not None and pd.notna(v):
@@ -142,6 +148,9 @@ def _int_median_suburb_type(
 
 
 def _landsize_suburb_type(ref: dict, suburb: str, ptype: str, med: pd.Series) -> float:
+    # `Landsize` can legitimately be 0 in this dataset (common for units/apartments
+    # where the listing doesn't represent a land lot). We therefore allow 0 and only
+    # fall back on missing/invalid values.
     k = (suburb, ptype)
     v = ref["suburb_type_median_landsize"].get(k)
     if v is not None and pd.notna(v) and float(v) >= 0:
@@ -192,9 +201,11 @@ def _year_suburb_type(ref: dict, suburb: str, ptype: str, med: pd.Series) -> int
 def _dwelling_values_from_profile(
     ref: dict, med: pd.Series, suburb: str, ptype: str
 ) -> dict:
-    """Median defaults for suburb × property type — exactly these seven inputs:
+    """Median defaults for suburb × property type — exactly these seven model inputs:
 
     rooms, bedrooms, bathrooms, car spaces, land size, building area, year built.
+
+    Used to (re)seed sidebar controls when the suburb or property type changes.
     """
     return {
         SS_ROOMS: _int_median_suburb_type(
@@ -256,7 +267,8 @@ def _dwelling_values_from_profile(
 
 
 def _input_defaults(ref: dict, med: pd.Series) -> dict:
-    """Dataset-aligned defaults: first suburb + first property type (sorted lists)."""
+    # Deterministic defaults so the app always starts with the same scenario for
+    # a given dataset (first suburb/type from sorted lists).
     first_suburb = ref["suburbs"][0]
     first_type = ref["types"][0]
     out = {
@@ -280,6 +292,8 @@ def _apply_defaults(defaults: dict) -> None:
 
 @st.cache_resource
 def load_bundle():
+    # Bundle contains the best sklearn Pipeline plus metadata (metrics, importances,
+    # and optionally holdout uncertainty percentiles).
     if not MODEL_PATH.is_file():
         st.error(
             f"Trained model not found at `{MODEL_PATH}`. "
@@ -291,6 +305,10 @@ def load_bundle():
 
 @st.cache_data
 def reference_data():
+    # Precompute per-suburb/per-type medians and a few other "context" facts used by the UI:
+    # - defaults for sidebar controls (medians)
+    # - bounds for clamping latitude/longitude sliders
+    # - snapshot stats and a map pin location
     df = pd.read_csv(DATA_PATH)
     med = df.median(numeric_only=True)
 
@@ -396,7 +414,12 @@ def _buyer_guide_map_point(ref: dict, suburb: str, med: pd.Series) -> tuple[floa
 
 
 def _dollar_range_from_uncertainty(bundle: dict, pred_log: float) -> tuple[float, float] | None:
-    """Approximate dollar range using holdout log-residual percentiles, else ±RMSE fallback."""
+    """Approximate dollar range using holdout log-residual percentiles.
+
+    The training script computes residuals in log-space (log1p(Price)).
+    We store p05/p50/p95 percentiles plus an RMSE fallback; here we turn those
+    back into dollars via expm1(pred_log + residual).
+    """
     unc = bundle.get("uncertainty") or {}
     p5 = unc.get("log_residual_p05")
     p95 = unc.get("log_residual_p95")
@@ -415,7 +438,8 @@ def _dollar_range_from_uncertainty(bundle: dict, pred_log: float) -> tuple[float
 
 
 def top_feature_importances_from_pipeline(pipeline, n: int = 10) -> list[dict]:
-    """Match training script: importances on preprocessed feature names."""
+    # When the final estimator exposes `feature_importances_` (e.g., RandomForest),
+    # we can report importances on preprocessed (OHE-expanded) feature names.
     model = pipeline.named_steps["model"]
     prep = pipeline.named_steps["prep"]
     if not hasattr(model, "feature_importances_"):
@@ -428,7 +452,8 @@ def top_feature_importances_from_pipeline(pipeline, n: int = 10) -> list[dict]:
 
 @st.cache_data
 def _latest_sales_in_suburb(suburb: str, n: int = 3) -> pd.DataFrame:
-    """Most recent dated sales rows for a suburb in the training CSV (day/month/year dates)."""
+    # UI-only: pulls the latest dated rows from the dataset to show "local activity".
+    # This is not used as model input and is not a live/complete market feed.
     df = pd.read_csv(
         DATA_PATH,
         usecols=["Suburb", "Address", "Date", "Price", "Type", "Rooms"],
@@ -450,6 +475,8 @@ def main():
         initial_sidebar_state="expanded",
     )
 
+    # Load the trained model bundle and precomputed dataset stats.
+    # `pipeline.predict` returns predictions in log-space (log1p(Price)).
     bundle = load_bundle()
     pipeline = bundle["pipeline"]
     ref = reference_data()
@@ -505,6 +532,8 @@ def main():
             key=SS_SUBURB,
             help="Rare suburbs are grouped as “Other” in the model.",
         )
+        # When the suburb changes, we reset dependent location defaults so the rest of
+        # the model inputs remain consistent with the selected area.
         if st.session_state.get("_suburb_prev") != suburb:
             st.session_state[SS_POSTCODE] = _postcode_for_suburb(ref, suburb, med)
             st.session_state[SS_REGION] = _region_for_suburb(ref, suburb)
@@ -513,6 +542,7 @@ def main():
             st.session_state[SS_LON] = _lon_for_suburb(ref, suburb, med)
             st.session_state[SS_PROPCOUNT] = _propertycount_for_suburb(ref, suburb, med)
             p_cur = st.session_state.get(SS_TYPE, ref["types"][0])
+            # Also reseed dwelling attributes (rooms/bed/bath/etc.) based on suburb×type medians.
             for k, v in _dwelling_values_from_profile(
                 ref, med, suburb, p_cur
             ).items():
@@ -528,6 +558,8 @@ def main():
             "**rooms through year built** reset to training **medians for this suburb × type** "
             "(then type-only → suburb-only → global median if a cell is missing).",
         )
+        # When the property type changes, we reset dwelling-specific fields so the scenario
+        # reflects a realistic joint pattern for suburb×type.
         if st.session_state.get("_ptype_prev") != property_type:
             for k, v in _dwelling_values_from_profile(
                 ref, med, suburb, property_type
@@ -676,6 +708,8 @@ def main():
         st.stop()
 
     X = prop.to_feature_frame()
+    # The training target is log1p(Price), so the model output is in log dollars.
+    # We convert back to dollars for display using expm1().
     pred_log = pipeline.predict(X)[0]
     price = float(np.expm1(pred_log))
     unc_range = _dollar_range_from_uncertainty(bundle, pred_log)
@@ -755,36 +789,40 @@ def main():
             )
 
     st.divider()
-    st.markdown(f"### Suburb snapshot · **{suburb}**")
-    st.caption(
-        "Quick orientation from the historical sales file — **not** used to compute the estimate "
-        "above."
-    )
+    # Snapshot card: qualitative buyer context from the historical sales file.
     g_lat, g_lon = _buyer_guide_map_point(ref, suburb, med)
-    snap_left, snap_right = st.columns([1.1, 1], gap="large")
-    with snap_left:
-        st.map(pd.DataFrame({"lat": [g_lat], "lon": [g_lon]}), width="stretch")
+    with st.container(border=True):
+        st.markdown(f"### Suburb snapshot: **{suburb}**")
         st.caption(
-            "Pin: **median lat/lon** of listings in this suburb in the training sample "
-            "(not a suburb boundary; ignores Advanced location sliders)."
+            "From the historical sales file for context only — **not** used to compute the "
+            "estimate above."
         )
-    with snap_right:
-        n_rows = int(ref["suburb_listing_count"].get(suburb, 0))
-        med_km = _distance_for_suburb(ref, suburb, med)
-        pc_g = _postcode_for_suburb(ref, suburb, med)
-        reg_g = _region_for_suburb(ref, suburb)
-        prop_ct = _propertycount_for_suburb(ref, suburb, med)
-        st.markdown(
-            f"- **Broad region:** {reg_g}\n"
-            f"- **Typical postcode:** {_format_postcode(pc_g)}\n"
-            f"- **Median distance to CBD** (in-sample sales): **{med_km:.1f} km**\n"
-            f"- **Sales rows in this dataset** for {suburb}: **{n_rows:,}**\n"
-            f"- **`Propertycount` in file** (suburb statistic): **{prop_ct:,.0f}**\n"
-        )
-        st.info(
-            "This block is a **qualitative** buyer’s-aid only. The **price** comes solely from "
-            "the model inputs in the sidebar."
-        )
+
+        snap_left, snap_right = st.columns([1.1, 1], gap="large")
+        with snap_left:
+            st.map(pd.DataFrame({"lat": [g_lat], "lon": [g_lon]}), width="stretch")
+            st.caption(
+                "Pin at **median listing coordinates** in the training sample: "
+                f"{g_lat:.4f}°, {g_lon:.4f}° · Not a boundary map · Advanced sliders do not move it."
+            )
+
+        with snap_right:
+            # Simple scannable stats for buyers (all derived from the dataset, not the model input).
+            n_rows = int(ref["suburb_listing_count"].get(suburb, 0))
+            med_km = _distance_for_suburb(ref, suburb, med)
+            pc_g = _postcode_for_suburb(ref, suburb, med)
+            reg_g = _region_for_suburb(ref, suburb)
+            prop_ct = _propertycount_for_suburb(ref, suburb, med)
+
+            st.markdown(f"**{reg_g}** · typical postcode **{_format_postcode(pc_g)}**")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Median distance to CBD", f"{med_km:.1f} km")
+            m2.metric("Sales rows in file", f"{n_rows:,}")
+            m3.metric(
+                "Properties in suburb (data)",
+                f"{prop_ct:,.0f}",
+                help="From the dataset's Propertycount field for this suburb (census-style stat).",
+            )
 
     with st.expander("Model details (holdout metrics)"):
         metrics = bundle.get("metrics", {})

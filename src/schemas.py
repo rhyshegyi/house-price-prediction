@@ -1,4 +1,8 @@
-"""Pydantic schemas for validated property inputs."""
+"""Pydantic schemas for validated property inputs.
+
+The app collects user-friendly fields in `app.py` and then needs to convert them
+to exactly the column names the sklearn pipeline expects.
+"""
 
 from typing import Optional
 
@@ -12,7 +16,7 @@ class PropertyInput(BaseModel):
     property_type: str = Field(
         ...,
         alias="Type",
-        description="Property type (h, u, t, etc.)",
+        description="Property type code used in the dataset (h/t/u/etc.).",
     )
     regionname: str = Field(..., description="Region name (e.g. Northern Metropolitan)")
     rooms: int = Field(..., ge=1, le=20)
@@ -22,6 +26,10 @@ class PropertyInput(BaseModel):
     bathroom: float = Field(..., ge=0, le=15)
     car: float = Field(..., ge=0, le=20)
     landsize: float = Field(..., ge=0)
+
+    # These optional fields mirror the original dataset column names
+    # via Pydantic aliases (`BuildingArea`, `YearBuilt`), so missing values can
+    # stay as `None` while still producing valid model inputs after imputation.
     building_area: Optional[float] = Field(None, alias="BuildingArea", ge=0)
     year_built: Optional[float] = Field(None, alias="YearBuilt", ge=1800, le=2030)
     lattitude: float = Field(..., alias="Lattitude", ge=-90, le=0)
@@ -31,7 +39,11 @@ class PropertyInput(BaseModel):
     model_config = {"populate_by_name": True}
 
     def to_feature_frame(self):
-        """Build a one-row pandas DataFrame with training column names."""
+        """Convert this validated input into a 1-row pandas DataFrame.
+
+        The returned DataFrame uses the training column names verbatim (e.g.
+        `Suburb`, `Type`, `BuildingArea`) so the sklearn `Pipeline` can consume it.
+        """
         import pandas as pd
 
         row = {
